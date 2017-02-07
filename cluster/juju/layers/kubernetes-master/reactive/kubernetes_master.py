@@ -79,6 +79,7 @@ def reset_states_for_delivery():
         host.service_stop(service)
     remove_state('kubernetes-master.components.started')
     remove_state('kubernetes-master.components.installed')
+    remove_state('kubernetes-master.addons.installed')
     remove_state('kube-dns.available')
     remove_state('kubernetes.dashboard.available')
 
@@ -88,32 +89,18 @@ def install():
     '''Unpack and put the Kubernetes master files on the path.'''
     # Get the resource via resource_get
     try:
-        archive = hookenv.resource_get('kubernetes')
-    except Exception:
-        message = 'Error fetching the kubernetes resource.'
+        archive = fetch_resource('kubernetes', min_filesize=1000000)
+    except FetchResourceFailed as e:
+        message = str(e)
         hookenv.log(message)
         hookenv.status_set('blocked', message)
         return
 
-    if not archive:
-        hookenv.log('Missing kubernetes resource.')
-        hookenv.status_set('blocked', 'Missing kubernetes resource.')
-        return
-
-    # Handle null resource publication, we check if filesize < 1mb
-    filesize = os.stat(archive).st_size
-    if filesize < 1000000:
-        hookenv.status_set('blocked', 'Incomplete kubernetes resource.')
-        return
-
     hookenv.status_set('maintenance', 'Unpacking kubernetes resource.')
+
     files_dir = os.path.join(hookenv.charm_dir(), 'files')
-
     os.makedirs(files_dir, exist_ok=True)
-
-    command = 'tar -xvzf {0} -C {1}'.format(archive, files_dir)
-    hookenv.log(command)
-    check_call(split(command))
+    check_call(['tar', '-xvzf', archive, '-C', files_dir])
 
     apps = [
         {'name': 'kube-apiserver', 'path': '/usr/local/bin'},
@@ -130,6 +117,26 @@ def install():
         check_call(install)
 
     set_state('kubernetes-master.components.installed')
+
+
+@when_not('kubernetes-master.addons.installed')
+def install_addons():
+    '''Unpack addons into /etc/kubernetes/addons'''
+    try:
+        archive = fetch_resource('addons', min_filesize=100)
+    except FetchResourceFailed as e:
+        message = str(e)
+        hookenv.log(message)
+        hookenv.status_set('blocked', message)
+        return
+
+    hookenv.status_set('maintenance', 'Unpacking addons resource.')
+
+    addons_dir = os.path.join(hookenv.charm_dir(), 'templates/addons')
+    os.makedirs(addons_dir, exist_ok=True)
+    check_call(['tar', '-xvzf', archive, '-C', addons_dir])
+
+    set_state('kubernetes-master.addons.installed')
 
 
 @when('cni.connected')
@@ -267,7 +274,8 @@ def push_api_data(kube_api):
     kube_api.set_api_port('6443')
 
 
-@when('kubernetes-master.components.started', 'kube-dns.available')
+@when('kubernetes-master.components.started',
+      'kubernetes-master.addons.installed', 'kube-dns.available')
 @when_not('kubernetes.dashboard.available')
 def install_dashboard_addons():
     ''' Launch dashboard addons if they are enabled in config '''
@@ -284,7 +292,8 @@ def install_dashboard_addons():
             hookenv.log('Kubernetes dashboard waiting on kubeapi')
 
 
-@when('kubernetes-master.components.started', 'kubernetes.dashboard.available')
+@when('kubernetes-master.components.started',
+      'kubernetes-master.addons.installed', 'kubernetes.dashboard.available')
 def remove_dashboard_addons():
     ''' Removes dashboard addons if they are disabled in config '''
     if not hookenv.config('enable-dashboard-addons'):
@@ -294,7 +303,8 @@ def remove_dashboard_addons():
         remove_state('kubernetes.dashboard.available')
 
 
-@when('kubernetes-master.components.started')
+@when('kubernetes-master.components.started',
+      'kubernetes-master.addons.installed')
 @when_not('kube-dns.available')
 def start_kube_dns():
     ''' State guard to starting DNS '''
@@ -426,6 +436,28 @@ def ceph_storage(ceph_admin):
     # have performed the necessary pre-req steps to interface with a ceph
     # deployment.
     set_state('ceph-storage.configured')
+
+
+class FetchResourceFailed(Exception):
+    pass
+
+
+def fetch_resource(name, min_filesize):
+    '''Fetch a resource. Returns a local path to the resource.'''
+    try:
+        resource = hookenv.resource_get(name)
+    except Exception:
+        raise FetchResourceFailed('Error fetching the %s resource.' % name)
+
+    if not resource:
+        raise FetchResourceFailed('Missing %s resource.' % name)
+
+    # Handle null resource publication, we check if filesize < min_filesize
+    filesize = os.stat(resource).st_size
+    if filesize < min_filesize:
+        raise FetchResourceFailed('Incomplete %s resource.' % name)
+
+    return resource
 
 
 def create_addon(template, context):

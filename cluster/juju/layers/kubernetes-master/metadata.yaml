@@ -36,3 +36,7 @@ resources:
     type: file
     filename: kubernetes.tar.gz
     description: "A tarball packaged release of the kubernetes bins."
+  addons:
+    type: file
+    filename: addons.tar.gz
+    description: "A tarball package containing kubernetes addon definitions."
