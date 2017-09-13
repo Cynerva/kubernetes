@@ -81,6 +81,7 @@ def reset_states_for_delivery():
     install_snaps()
     set_state('reconfigure.authentication.setup')
     remove_state('authentication.setup')
+    remove_state('cdk-service-kicker.installed')
 
 
 def rename_file_idempotent(source, destination):
@@ -158,6 +159,32 @@ def install_snaps():
     snap.install('cdk-addons', channel=channel)
     set_state('kubernetes-master.snaps.installed')
     remove_state('kubernetes-master.components.started')
+
+
+@when_not('cdk-service-kicker.installed')
+def install_cdk_service_kicker():
+    ''' Installs the cdk-service-kicker service. Workaround for
+    https://github.com/juju-solutions/bundle-canonical-kubernetes/issues/357
+    '''
+    source = 'cdk-service-kicker'
+    dest = '/usr/bin/cdk-service-kicker'
+    services = [
+        'snap.kube-apiserver.daemon',
+        'snap.kube-controller-manager.daemon',
+        'snap.kube-scheduler.daemon'
+    ]
+    context = {'services': ' '.join(services)}
+    render(source, dest, context)
+    os.chmod('/usr/bin/cdk-service-kicker', 0o775)
+
+    source = 'cdk-service-kicker.service'
+    dest = '/etc/systemd/system/cdk-service-kicker.service'
+    context = {}
+    render(source, dest, context)
+    command = ['systemctl', 'enable', 'cdk-service-kicker']
+    check_call(command)
+
+    set_state('cdk-service-kicker.installed')
 
 
 @when('config.changed.channel')

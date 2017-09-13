@@ -72,6 +72,7 @@ def upgrade_charm():
     remove_state('kubernetes-worker.cni-plugins.installed')
     remove_state('kubernetes-worker.config.created')
     remove_state('kubernetes-worker.ingress.available')
+    remove_state('cdk-service-kicker.installed')
     set_state('kubernetes-worker.restart-needed')
 
 
@@ -154,6 +155,31 @@ def install_snaps():
     set_state('kubernetes-worker.restart-needed')
     remove_state('kubernetes-worker.snaps.upgrade-needed')
     remove_state('kubernetes-worker.snaps.upgrade-specified')
+
+
+@when_not('cdk-service-kicker.installed')
+def install_cdk_service_kicker():
+    ''' Installs the cdk-service-kicker service. Workaround for
+    https://github.com/juju-solutions/bundle-canonical-kubernetes/issues/357
+    '''
+    source = 'cdk-service-kicker'
+    dest = '/usr/bin/cdk-service-kicker'
+    services = [
+        'snap.kubelet.daemon',
+        'snap.kube-proxy.daemon'
+    ]
+    context = {'services': ' '.join(services)}
+    render(source, dest, context)
+    os.chmod('/usr/bin/cdk-service-kicker', 0o775)
+
+    source = 'cdk-service-kicker.service'
+    dest = '/etc/systemd/system/cdk-service-kicker.service'
+    context = {}
+    render(source, dest, context)
+    command = ['systemctl', 'enable', 'cdk-service-kicker']
+    check_call(command)
+
+    set_state('cdk-service-kicker.installed')
 
 
 @hook('stop')
